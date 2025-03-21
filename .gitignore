@@ -77,3 +77,6 @@ docker-compose.override.yml
 **/yarn.lock
 # Ignore dotenv .local files
 .env*.local
+
+# Ignore local-only rspec configuration
+.rspec-local

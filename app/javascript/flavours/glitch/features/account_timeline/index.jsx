@@ -11,7 +11,8 @@ import { TimelineHint } from 'flavours/glitch/components/timeline_hint';
 import ProfileColumnHeader from 'flavours/glitch/features/account/components/profile_column_header';
 import BundleColumnError from 'flavours/glitch/features/ui/components/bundle_column_error';
 import { normalizeForLookup } from 'flavours/glitch/reducers/accounts_map';
-import { getAccountHidden } from 'flavours/glitch/selectors';
+import { getAccountHidden } from 'flavours/glitch/selectors/accounts';
+import { useAppSelector } from 'flavours/glitch/store';
 
 import { lookupAccount, fetchAccount } from '../../actions/accounts';
 import { fetchFeaturedTags } from '../../actions/featured_tags';
@@ -20,8 +21,8 @@ import { LoadingIndicator } from '../../components/loading_indicator';
 import StatusList from '../../components/status_list';
 import Column from '../ui/components/column';
 
+import { AccountHeader } from './components/account_header';
 import { LimitedAccountHint } from './components/limited_account_hint';
-import HeaderContainer from './containers/header_container';
 
 const emptyList = ImmutableList();
 
@@ -57,12 +58,22 @@ const mapStateToProps = (state, { params: { acct, id, tagged }, withReplies = fa
   };
 };
 
-const RemoteHint = ({ url }) => (
-  <TimelineHint url={url} resource={<FormattedMessage id='timeline_hint.resources.statuses' defaultMessage='Older posts' />} />
-);
+const RemoteHint = ({ accountId, url }) => {
+  const acct = useAppSelector(state => state.accounts.get(accountId)?.acct);
+  const domain = acct ? acct.split('@')[1] : undefined;
+
+  return (
+    <TimelineHint
+      url={url}
+      message={<FormattedMessage id='hints.profiles.posts_may_be_missing' defaultMessage='Some posts from this profile may be missing.' />}
+      label={<FormattedMessage id='hints.profiles.see_more_posts' defaultMessage='See more posts on {domain}' values={{ domain: <strong>{domain}</strong> }} />}
+    />
+  );
+};
 
 RemoteHint.propTypes = {
   url: PropTypes.string.isRequired,
+  accountId: PropTypes.string.isRequired,
 };
 
 class AccountTimeline extends ImmutablePureComponent {
@@ -176,19 +187,19 @@ class AccountTimeline extends ImmutablePureComponent {
     } else if (hidden) {
       emptyMessage = <LimitedAccountHint accountId={accountId} />;
     } else if (remote && statusIds.isEmpty()) {
-      emptyMessage = <RemoteHint url={remoteUrl} />;
+      emptyMessage = <RemoteHint accountId={accountId} url={remoteUrl} />;
     } else {
       emptyMessage = <FormattedMessage id='empty_column.account_timeline' defaultMessage='No posts found' />;
     }
 
-    const remoteMessage = remote ? <RemoteHint url={remoteUrl} /> : null;
+    const remoteMessage = remote ? <RemoteHint accountId={accountId} url={remoteUrl} /> : null;
 
     return (
       <Column ref={this.setRef}>
         <ProfileColumnHeader onClick={this.handleHeaderClick} multiColumn={multiColumn} />
 
         <StatusList
-          prepend={<HeaderContainer accountId={this.props.accountId} hideTabs={forceEmptyState} tagged={this.props.params.tagged} />}
+          prepend={<AccountHeader accountId={this.props.accountId} hideTabs={forceEmptyState} tagged={this.props.params.tagged} />}
           alwaysPrepend
           append={remoteMessage}
           scrollKey='account_timeline'
