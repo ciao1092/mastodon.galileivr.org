@@ -45,15 +45,17 @@ namespace :api, format: false do
       resources :list, only: :show
     end
 
-    get '/streaming', to: 'streaming#index'
-    get '/streaming/(*any)', to: 'streaming#index'
+    with_options to: 'streaming#index' do
+      get '/streaming'
+      get '/streaming/(*any)'
+    end
 
     resources :custom_emojis, only: [:index]
     resources :suggestions, only: [:index, :destroy]
     resources :scheduled_statuses, only: [:index, :show, :update, :destroy]
     resources :preferences, only: [:index]
 
-    resources :annual_reports, only: [:index] do
+    resources :annual_reports, only: [:index, :show] do
       member do
         post :read
       end
@@ -69,23 +71,6 @@ namespace :api, format: false do
       end
     end
 
-    # namespace :crypto do
-    #   resources :deliveries, only: :create
-
-    #   namespace :keys do
-    #     resource :upload, only: [:create]
-    #     resource :query,  only: [:create]
-    #     resource :claim,  only: [:create]
-    #     resource :count,  only: [:show]
-    #   end
-
-    #   resources :encrypted_messages, only: [:index] do
-    #     collection do
-    #       post :clear
-    #     end
-    #   end
-    # end
-
     resources :conversations, only: [:index, :destroy] do
       member do
         post :read
@@ -93,7 +78,7 @@ namespace :api, format: false do
       end
     end
 
-    resources :media, only: [:create, :update, :show]
+    resources :media, only: [:create, :update, :show, :destroy]
     resources :blocks, only: [:index]
     resources :mutes, only: [:index]
     resources :favourites, only: [:index]
@@ -132,15 +117,22 @@ namespace :api, format: false do
         resources :rules, only: [:index]
         resources :domain_blocks, only: [:index]
         resource :privacy_policy, only: [:show]
+        resource :terms_of_service, only: [:show]
         resource :extended_description, only: [:show]
         resource :translation_languages, only: [:show]
         resource :languages, only: [:show]
         resource :activity, only: [:show], controller: :activity
+
+        get '/terms_of_service/:date', to: 'terms_of_services#show'
       end
     end
 
     namespace :peers do
       get :search, to: 'search#index'
+    end
+
+    namespace :domain_blocks do
+      resource :preview, only: [:show]
     end
 
     resource :domain_blocks, only: [:show, :create, :destroy]
@@ -156,6 +148,12 @@ namespace :api, format: false do
 
     namespace :notifications do
       resources :requests, only: [:index, :show] do
+        collection do
+          post :accept, to: 'requests#accept_bulk'
+          post :dismiss, to: 'requests#dismiss_bulk'
+          get :merged, to: 'requests#merged?'
+        end
+
         member do
           post :accept
           post :dismiss
@@ -169,6 +167,7 @@ namespace :api, format: false do
       collection do
         post :clear
         delete :destroy_multiple
+        get :unread_count
       end
 
       member do
@@ -231,7 +230,7 @@ namespace :api, format: false do
 
     resources :featured_tags, only: [:index, :create, :destroy]
 
-    resources :polls, only: [:create, :show] do
+    resources :polls, only: [:show] do
       resources :votes, only: :create, module: :polls
     end
 
@@ -332,24 +331,29 @@ namespace :api, format: false do
     namespace :admin do
       resources :accounts, only: [:index]
     end
-  end
 
-  namespace :v2_alpha do
-    resources :notifications, only: [:index, :show] do
+    namespace :notifications do
+      resource :policy, only: [:show, :update]
+    end
+
+    resources :notifications, param: :group_key, only: [:index, :show] do
       collection do
         post :clear
+        get :unread_count
       end
 
       member do
         post :dismiss
       end
+
+      resources :accounts, only: [:index], module: :notifications
     end
   end
 
   namespace :web do
     resource :settings, only: [:update]
     resources :embeds, only: [:show]
-    resources :push_subscriptions, only: [:create] do
+    resources :push_subscriptions, only: [:create, :destroy] do
       member do
         put :update
       end
