@@ -16,6 +16,7 @@ import { focusApp, unfocusApp, changeLayout } from 'flavours/glitch/actions/app'
 import { synchronouslySubmitMarkers, submitMarkers, fetchMarkers } from 'flavours/glitch/actions/markers';
 import { fetchNotifications } from 'flavours/glitch/actions/notification_groups';
 import { INTRODUCTION_VERSION } from 'flavours/glitch/actions/onboarding';
+import { AlertsController } from 'flavours/glitch/components/alerts_controller';
 import { HoverCardController } from 'flavours/glitch/components/hover_card_controller';
 import { Permalink } from 'flavours/glitch/components/permalink';
 import { PictureInPicture } from 'flavours/glitch/features/picture_in_picture';
@@ -32,11 +33,10 @@ import initialState, { me, owner, singleUserMode, trendsEnabled, trendsAsLanding
 
 import BundleColumnError from './components/bundle_column_error';
 import Header from './components/header';
-import UploadArea from './components/upload_area';
+import { UploadArea } from './components/upload_area';
 import ColumnsAreaContainer from './containers/columns_area_container';
 import LoadingBarContainer from './containers/loading_bar_container';
 import ModalContainer from './containers/modal_container';
-import NotificationsContainer from './containers/notifications_container';
 import {
   Compose,
   Status,
@@ -95,6 +95,7 @@ const mapStateToProps = state => ({
   hasMediaAttachments: state.getIn(['compose', 'media_attachments']).size > 0,
   canUploadMore: !state.getIn(['compose', 'media_attachments']).some(x => ['audio', 'video'].includes(x.get('type'))) && state.getIn(['compose', 'media_attachments']).size < 4,
   isWide: state.getIn(['local_settings', 'stretch']),
+  fullWidthColumns: state.getIn(['local_settings', 'fullwidth_columns']),
   unreadNotifications: selectUnreadNotificationGroupsCount(state),
   showFaviconBadge: state.getIn(['local_settings', 'notifications', 'favicon_badge']),
   hicolorPrivacyIcons: state.getIn(['local_settings', 'hicolor_privacy_icons']),
@@ -284,6 +285,7 @@ class UI extends PureComponent {
     dispatch: PropTypes.func.isRequired,
     children: PropTypes.node,
     isWide: PropTypes.bool,
+    fullWidthColumns: PropTypes.bool,
     systemFontUi: PropTypes.bool,
     isComposing: PropTypes.bool,
     hasComposingText: PropTypes.bool,
@@ -624,6 +626,7 @@ class UI extends PureComponent {
 
     const className = classNames('ui', {
       'wide': isWide,
+      'fullwidth-columns': this.props.fullWidthColumns,
       'system-font': this.props.systemFontUi,
       'hicolor-privacy-icons': this.props.hicolorPrivacyIcons,
     });
@@ -672,7 +675,7 @@ class UI extends PureComponent {
           </SwitchingColumnsArea>
 
           {layout !== 'mobile' && <PictureInPicture />}
-          <NotificationsContainer />
+          <AlertsController />
           {!disableHoverCards && <HoverCardController />}
           <LoadingBarContainer className='loading-bar' />
           <ModalContainer />
