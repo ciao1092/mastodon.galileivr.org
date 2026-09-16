@@ -1,12 +1,13 @@
 # frozen_string_literal: true
 
 class InitialStateSerializer < ActiveModel::Serializer
+  include InstanceHelper
   include RoutingHelper
 
   attributes :meta, :compose, :accounts,
              :media_attachments, :settings,
              :max_feed_hashtags, :poll_limits,
-             :languages
+             :languages, :features
 
   attribute :critical_updates_pending, if: -> { object&.role&.can?(:view_devops) && SoftwareUpdate.check_enabled? }
 
@@ -26,13 +27,14 @@ class InitialStateSerializer < ActiveModel::Serializer
     }
   end
 
-  def meta # rubocop:disable Metrics/AbcSize
+  def meta
     store = default_meta_store
 
     if object.current_account
       store[:me]                = object.current_account.id.to_s
       store[:boost_modal]       = object_account_user.setting_boost_modal
       store[:favourite_modal]   = object_account_user.setting_favourite_modal
+      store[:quick_boosting]    = object_account_user.setting_quick_boosting
       store[:delete_modal]      = object_account_user.setting_delete_modal
       store[:missing_alt_text_modal] = object_account_user.settings['web.missing_alt_text_modal']
       store[:auto_play_gif]     = object_account_user.setting_auto_play_gif
@@ -45,8 +47,9 @@ class InitialStateSerializer < ActiveModel::Serializer
       store[:use_blurhash]      = object_account_user.setting_use_blurhash
       store[:use_pending_items] = object_account_user.setting_use_pending_items
       store[:default_content_type] = object_account_user.setting_default_content_type
-      store[:system_emoji_font] = object_account_user.setting_system_emoji_font
       store[:show_trends]       = Setting.trends && object_account_user.setting_trends
+      store[:emoji_style]       = object_account_user.settings['web.emoji_style']
+      store[:wrapstodon]        = wrapstodon
     else
       store[:auto_play_gif] = Setting.auto_play_gif
       store[:display_media] = Setting.display_media
@@ -70,6 +73,7 @@ class InitialStateSerializer < ActiveModel::Serializer
       store[:default_privacy]   = object.visibility || object_account_user.setting_default_privacy
       store[:default_sensitive] = object_account_user.setting_default_sensitive
       store[:default_language]  = object_account_user.preferred_posting_language
+      store[:default_quote_policy] = object_account_user.setting_default_quote_policy
     end
 
     store[:text] = object.text if object.text
@@ -102,7 +106,21 @@ class InitialStateSerializer < ActiveModel::Serializer
     LanguagesHelper::SUPPORTED_LOCALES.map { |(key, value)| [key, value[0], value[1]] }
   end
 
+  def features
+    Mastodon::Feature.enabled_features
+  end
+
   private
+
+  def wrapstodon
+    current_campaign = AnnualReport.current_campaign
+    return if current_campaign.blank?
+
+    {
+      year: current_campaign,
+      state: AnnualReport.new(object.current_account, current_campaign).state,
+    }
+  end
 
   def default_meta_store
     {
@@ -110,7 +128,7 @@ class InitialStateSerializer < ActiveModel::Serializer
       activity_api_enabled: Setting.activity_api_enabled,
       admin: object.admin&.id&.to_s,
       domain: Addressable::IDNA.to_unicode(instance_presenter.domain),
-      limited_federation_mode: Rails.configuration.x.limited_federation_mode,
+      limited_federation_mode: Rails.configuration.x.mastodon.limited_federation_mode,
       locale: I18n.locale,
       mascot: instance_presenter.mascot&.file&.url,
       profile_directory: Setting.profile_directory,
@@ -122,12 +140,16 @@ class InitialStateSerializer < ActiveModel::Serializer
       sso_redirect: sso_redirect,
       status_page_url: Setting.status_page_url,
       streaming_api_base_url: Rails.configuration.x.streaming_api_base_url,
-      timeline_preview: Setting.timeline_preview,
       title: instance_presenter.title,
-      trends_as_landing_page: Setting.trends_as_landing_page,
+      custom_app_icon: app_icon_path(120),
+      landing_page: Setting.landing_page,
       trends_enabled: Setting.trends,
       version: instance_presenter.version,
-      terms_of_service_enabled: TermsOfService.live.exists?,
+      terms_of_service_enabled: TermsOfService.current.present?,
+      local_live_feed_access: Setting.local_live_feed_access,
+      remote_live_feed_access: Setting.remote_live_feed_access,
+      local_topic_feed_access: Setting.local_topic_feed_access,
+      remote_topic_feed_access: Setting.remote_topic_feed_access,
     }
   end
 
@@ -136,7 +158,7 @@ class InitialStateSerializer < ActiveModel::Serializer
   end
 
   def serialized_account(account)
-    ActiveModelSerializers::SerializableResource.new(account, serializer: REST::AccountSerializer)
+    ActiveModelSerializers::SerializableResource.new(account, serializer: REST::AccountSerializer, scope_name: :current_user, scope: object.current_account&.user)
   end
 
   def instance_presenter

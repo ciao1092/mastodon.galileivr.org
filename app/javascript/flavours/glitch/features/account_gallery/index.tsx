@@ -2,27 +2,26 @@ import { useEffect, useCallback } from 'react';
 
 import { FormattedMessage, useIntl, defineMessages } from 'react-intl';
 
-import { useParams } from 'react-router-dom';
+import { List as ImmutableList, isList } from 'immutable';
 
-import { createSelector } from '@reduxjs/toolkit';
-import type { Map as ImmutableMap } from 'immutable';
-import { List as ImmutableList } from 'immutable';
-
+import { openModal } from '@/flavours/glitch/actions/modal';
+import { expandAccountMediaTimeline } from '@/flavours/glitch/actions/timelines';
+import { AccountHeader } from '@/flavours/glitch/components/account_header';
+import { Column } from '@/flavours/glitch/components/column';
+import { ColumnHeader } from '@/flavours/glitch/components/column/header';
+import { LimitedAccountHint } from '@/flavours/glitch/components/limited_account_hint';
+import { RemoteHint } from '@/flavours/glitch/components/remote_hint';
+import ScrollableList from '@/flavours/glitch/components/scrollable_list';
+import { BundleColumnError } from '@/flavours/glitch/features/ui/components/bundle_column_error';
+import { useAccountId } from '@/flavours/glitch/hooks/useAccountId';
+import { useAccountVisibility } from '@/flavours/glitch/hooks/useAccountVisibility';
+import type { MediaAttachment } from '@/flavours/glitch/models/media_attachment';
+import {
+  useAppSelector,
+  useAppDispatch,
+  createAppSelector,
+} from '@/flavours/glitch/store';
 import PersonIcon from '@/material-icons/400-24px/person.svg?react';
-import { lookupAccount, fetchAccount } from 'flavours/glitch/actions/accounts';
-import { openModal } from 'flavours/glitch/actions/modal';
-import { expandAccountMediaTimeline } from 'flavours/glitch/actions/timelines';
-import ScrollableList from 'flavours/glitch/components/scrollable_list';
-import { TimelineHint } from 'flavours/glitch/components/timeline_hint';
-import { AccountHeader } from 'flavours/glitch/features/account_timeline/components/account_header';
-import { LimitedAccountHint } from 'flavours/glitch/features/account_timeline/components/limited_account_hint';
-import BundleColumnError from 'flavours/glitch/features/ui/components/bundle_column_error';
-import Column from 'flavours/glitch/features/ui/components/column';
-import type { MediaAttachment } from 'flavours/glitch/models/media_attachment';
-import { normalizeForLookup } from 'flavours/glitch/reducers/accounts_map';
-import { getAccountHidden } from 'flavours/glitch/selectors/accounts';
-import type { RootState } from 'flavours/glitch/store';
-import { useAppSelector, useAppDispatch } from 'flavours/glitch/store';
 
 import { MediaItem } from './components/media_item';
 
@@ -30,141 +29,104 @@ const messages = defineMessages({
   profile: { id: 'column_header.profile', defaultMessage: 'Profile' },
 });
 
-const getAccountGallery = createSelector(
+const emptyList = ImmutableList<MediaAttachment>();
+
+const selectGalleryTimeline = createAppSelector(
   [
-    (state: RootState, accountId: string) =>
-      (state.timelines as ImmutableMap<string, unknown>).getIn(
-        [`account:${accountId}:media`, 'items'],
-        ImmutableList(),
-      ) as ImmutableList<string>,
-    (state: RootState) => state.statuses,
+    (_state, accountId?: string | null) => accountId,
+    (state) => state.timelines,
+    (state) => state.accounts,
+    (state) => state.statuses,
   ],
-  (statusIds, statuses) => {
-    let items = ImmutableList<MediaAttachment>();
+  (accountId, timelines, accounts, statuses) => {
+    let items = emptyList;
+    if (!accountId) {
+      return {
+        items,
+        hasMore: false,
+        isLoading: false,
+        withReplies: false,
+      };
+    }
+    const account = accounts.get(accountId);
+    if (!account) {
+      return {
+        items,
+        hasMore: false,
+        isLoading: false,
+        withReplies: false,
+      };
+    }
 
-    statusIds.forEach((statusId) => {
-      const status = statuses.get(statusId) as
-        | ImmutableMap<string, unknown>
-        | undefined;
+    const { show_media, show_media_replies } = account;
+    // If the account disabled showing media, don't display anything.
+    if (!show_media) {
+      return {
+        items,
+        hasMore: false,
+        isLoading: false,
+        withReplies: false,
+      };
+    }
 
-      if (status) {
+    const withReplies = show_media_replies;
+    const timeline = timelines.get(
+      `account:${accountId}:media${withReplies ? ':with_replies' : ''}`,
+    );
+    const statusIds = timeline?.get('items');
+
+    if (isList(statusIds)) {
+      for (const statusId of statusIds) {
+        const status = statuses.get(statusId);
         items = items.concat(
           (
-            status.get('media_attachments') as ImmutableList<MediaAttachment>
+            status?.get('media_attachments') as ImmutableList<MediaAttachment>
           ).map((media) => media.set('status', status)),
         );
       }
-    });
+    }
 
-    return items;
+    return {
+      items,
+      hasMore: !!timeline?.get('hasMore'),
+      isLoading: timeline?.get('isLoading') ? true : false,
+      withReplies,
+    };
   },
 );
-
-interface Params {
-  acct?: string;
-  id?: string;
-}
-
-const RemoteHint: React.FC<{
-  accountId: string;
-}> = ({ accountId }) => {
-  const account = useAppSelector((state) => state.accounts.get(accountId));
-  const acct = account?.acct;
-  const url = account?.url;
-  const domain = acct ? acct.split('@')[1] : undefined;
-
-  if (!url) {
-    return null;
-  }
-
-  return (
-    <TimelineHint
-      url={url}
-      message={
-        <FormattedMessage
-          id='hints.profiles.posts_may_be_missing'
-          defaultMessage='Some posts from this profile may be missing.'
-        />
-      }
-      label={
-        <FormattedMessage
-          id='hints.profiles.see_more_posts'
-          defaultMessage='See more posts on {domain}'
-          values={{ domain: <strong>{domain}</strong> }}
-        />
-      }
-    />
-  );
-};
 
 export const AccountGallery: React.FC<{
   multiColumn: boolean;
 }> = ({ multiColumn }) => {
   const intl = useIntl();
-  const { acct, id } = useParams<Params>();
   const dispatch = useAppDispatch();
-  const accountId = useAppSelector(
-    (state) =>
-      id ??
-      (state.accounts_map.get(normalizeForLookup(acct)) as string | undefined),
-  );
-  const attachments = useAppSelector((state) =>
-    accountId
-      ? getAccountGallery(state, accountId)
-      : ImmutableList<MediaAttachment>(),
-  );
-  const isLoading = useAppSelector((state) =>
-    (state.timelines as ImmutableMap<string, unknown>).getIn([
-      `account:${accountId}:media`,
-      'isLoading',
-    ]),
-  );
-  const hasMore = useAppSelector((state) =>
-    (state.timelines as ImmutableMap<string, unknown>).getIn([
-      `account:${accountId}:media`,
-      'hasMore',
-    ]),
-  );
-  const account = useAppSelector((state) =>
-    accountId ? state.accounts.get(accountId) : undefined,
-  );
-  const blockedBy = useAppSelector(
-    (state) =>
-      state.relationships.getIn([accountId, 'blocked_by'], false) as boolean,
-  );
-  const suspended = useAppSelector(
-    (state) => state.accounts.getIn([accountId, 'suspended'], false) as boolean,
-  );
-  const isAccount = !!account;
-  const remote = account?.acct !== account?.username;
-  const hidden = useAppSelector((state) =>
-    accountId ? getAccountHidden(state, accountId) : false,
-  );
+  const accountId = useAccountId();
+  const {
+    isLoading,
+    items: attachments,
+    hasMore,
+    withReplies,
+  } = useAppSelector((state) => selectGalleryTimeline(state, accountId));
+
+  const { suspended, blockedBy, hidden } = useAccountVisibility(accountId);
+
   const maxId = attachments.last()?.getIn(['status', 'id']) as
     | string
     | undefined;
 
   useEffect(() => {
-    if (!accountId) {
-      dispatch(lookupAccount(acct));
+    if (accountId) {
+      void dispatch(expandAccountMediaTimeline(accountId, { withReplies }));
     }
-  }, [dispatch, accountId, acct]);
-
-  useEffect(() => {
-    if (accountId && !isAccount) {
-      dispatch(fetchAccount(accountId));
-    }
-
-    if (accountId && isAccount) {
-      void dispatch(expandAccountMediaTimeline(accountId));
-    }
-  }, [dispatch, accountId, isAccount]);
+  }, [dispatch, accountId, withReplies]);
 
   const handleLoadMore = useCallback(() => {
     if (maxId) {
-      void dispatch(expandAccountMediaTimeline(accountId, { maxId }));
+      void dispatch(
+        expandAccountMediaTimeline(accountId, { maxId, withReplies }),
+      );
     }
-  }, [dispatch, accountId, maxId]);
+  }, [maxId, dispatch, accountId, withReplies]);
 
   const handleOpenMedia = useCallback(
     (attachment: MediaAttachment) => {
@@ -215,7 +177,7 @@ export const AccountGallery: React.FC<{
     [dispatch],
   );
 
-  if (accountId && !isAccount) {
+  if (accountId === null) {
     return <BundleColumnError multiColumn={multiColumn} errorType='routing' />;
   }
 
@@ -238,7 +200,7 @@ export const AccountGallery: React.FC<{
           defaultMessage='Profile unavailable'
         />
       );
-    } else if (remote && attachments.isEmpty()) {
+    } else if (attachments.isEmpty()) {
       emptyMessage = <RemoteHint accountId={accountId} />;
     } else {
       emptyMessage = (
@@ -253,12 +215,15 @@ export const AccountGallery: React.FC<{
   const forceEmptyState = suspended || blockedBy || hidden;
 
   return (
-    <Column
-      icon='user-circle'
-      iconComponent={PersonIcon}
-      heading={intl.formatMessage(messages.profile)}
-      alwaysShowBackButton
-    >
+    <Column>
+      <ColumnHeader
+        icon='user-circle'
+        iconComponent={PersonIcon}
+        title={intl.formatMessage(messages.profile)}
+        showBackButton
+        scrollTopOnClick
+      />
+
       <ScrollableList
         className='account-gallery__container'
         prepend={
@@ -267,7 +232,7 @@ export const AccountGallery: React.FC<{
           )
         }
         alwaysPrepend
-        append={remote && accountId && <RemoteHint accountId={accountId} />}
+        append={accountId && <RemoteHint accountId={accountId} />}
         scrollKey='account_gallery'
         isLoading={isLoading}
         hasMore={!forceEmptyState && hasMore}

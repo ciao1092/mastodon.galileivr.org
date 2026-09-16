@@ -2,7 +2,14 @@
 
 class PostStatusService < BaseService
   include Redisable
+  include Lockable
   include LanguagesHelper
+
+  # How much to delay sending an e-mail about a new post, to allow grouping multiple posts
+  EMAIL_DISTRIBUTION_DELAY = 5.minutes.freeze
+
+  # If the job is not executed within this timeframe, it will lose its arguments
+  EMAIL_DISTRIBUTION_TTL = 1.hour.to_i
 
   class UnexpectedMentionsError < StandardError
     attr_reader :accounts
@@ -13,11 +20,22 @@ class PostStatusService < BaseService
     end
   end
 
+  class IdempotencyError < StandardError
+    attr_reader :status
+
+    def initialize(status)
+      super()
+      @status = status
+    end
+  end
+
   # Post a text status update, fetch and notify remote users mentioned
   # @param [Account] account Account from which to post
   # @param [Hash] options
   # @option [String] :text Message
   # @option [Status] :thread Optional status to reply to
+  # @option [Status] :quoted_status Optional status to quote
+  # @option [String] :quote_approval_policy Approval policy for quotes, one of `public`, `followers` or `nobody`
   # @option [Boolean] :sensitive
   # @option [String] :visibility
   # @option [String] :spoiler_text
@@ -35,21 +53,19 @@ class PostStatusService < BaseService
     @options     = options
     @text        = @options[:text] || ''
     @in_reply_to = @options[:thread]
+    @quoted_status = @options[:quoted_status]
 
-    @antispam = Antispam.new
-
-    return idempotency_duplicate if idempotency_given? && idempotency_duplicate?
-
-    validate_media!
     preprocess_attributes!
 
-    if scheduled?
-      schedule_status!
-    else
-      process_status!
-    end
+    with_idempotency do
+      validate_media!
 
-    redis.setex(idempotency_key, 3_600, @status.id) if idempotency_given?
+      if scheduled?
+        schedule_status!
+      else
+        process_status!
+      end
+    end
 
     unless scheduled?
       postprocess_status!
@@ -57,14 +73,14 @@ class PostStatusService < BaseService
     end
 
     @status
-  rescue Antispam::SilentlyDrop => e
+  rescue Antispam::SilentlyDrop, IdempotencyError => e
     e.status
   end
 
   private
 
   def fill_blank_text!
-    return unless @text.blank? && @options[:spoiler_text].present?
+    return unless @text.blank? && @options[:spoiler_text].present? && @quoted_status.blank?
 
     @text = begin
       if @media&.any?(&:video?) || @media&.any?(&:gifv?)
@@ -84,6 +100,7 @@ class PostStatusService < BaseService
     @sensitive    = (@options[:sensitive].nil? ? @account.user&.setting_default_sensitive : @options[:sensitive]) || @options[:spoiler_text].present?
     @visibility   = @options[:visibility] || @account.user&.setting_default_privacy
     @visibility   = :unlisted if @visibility&.to_sym == :public && @account.silenced?
+    @visibility   = :private if @quoted_status&.private_visibility? && %i(public unlisted).include?(@visibility&.to_sym)
     @scheduled_at = @options[:scheduled_at]&.to_datetime
     @scheduled_at = nil if scheduled_in_the_past?
   rescue ArgumentError
@@ -92,15 +109,43 @@ class PostStatusService < BaseService
 
   def process_status!
     @status = @account.statuses.new(status_attributes)
-    process_mentions_service.call(@status, save_records: false)
+    process_mentions_service.call(@status)
     safeguard_mentions!(@status)
-    @antispam.local_preflight_check!(@status)
+    safeguard_private_mention_quote!(@status)
+    attach_tagged_objects!(@status)
+    attach_quote!(@status)
+
+    antispam = Antispam.new(@status)
+    antispam.local_preflight_check!
 
     # The following transaction block is needed to wrap the UPDATEs to
     # the media attachments when the status is created
     ApplicationRecord.transaction do
       @status.save!
     end
+  end
+
+  def safeguard_private_mention_quote!(status)
+    return if @quoted_status.nil? || @visibility.to_sym != :direct
+
+    # The mentions array test here is awkward because the relationship is not persisted at this time
+    return if @quoted_status.account_id == @account.id || status.mentions.to_a.any? { |mention| mention.account_id == @quoted_status.account_id && !mention.silent }
+
+    status.errors.add(:base, I18n.t('statuses.errors.quoted_user_not_mentioned'))
+    raise ActiveRecord::RecordInvalid, status
+  end
+
+  def attach_quote!(status)
+    return if @quoted_status.nil?
+
+    status.quote = Quote.create(quoted_status: @quoted_status, status: status)
+    status.quote.ensure_quoted_access
+
+    status.quote.accept! if @quoted_status.local? && StatusPolicy.new(@status.account, @quoted_status).quote?
+  end
+
+  def attach_tagged_objects!(status)
+    ProcessLinksService.new.call(status)
   end
 
   def safeguard_mentions!(status)
@@ -116,7 +161,10 @@ class PostStatusService < BaseService
 
   def schedule_status!
     status_for_validation = @account.statuses.build(status_attributes)
-    @antispam.local_preflight_check!(status_for_validation)
+    safeguard_private_mention_quote!(status_for_validation)
+
+    antispam = Antispam.new(status_for_validation)
+    antispam.local_preflight_check!
 
     if status_for_validation.valid?
       # Marking the status as destroyed is necessary to prevent the status from being
@@ -134,7 +182,7 @@ class PostStatusService < BaseService
       raise ActiveRecord::RecordInvalid
     end
   rescue Antispam::SilentlyDrop
-    @status = @account.scheduled_status.new(scheduled_status_attributes).tap(&:delete)
+    @status = @account.scheduled_statuses.new(scheduled_status_attributes).tap(&:delete)
   end
 
   def postprocess_status!
@@ -142,8 +190,24 @@ class PostStatusService < BaseService
     Trends.tags.register(@status)
     LinkCrawlWorker.perform_async(@status.id)
     DistributionWorker.perform_async(@status.id)
+    process_email_subscriptions!
     ActivityPub::DistributionWorker.perform_async(@status.id) unless @status.local_only?
     PollExpirationNotifyWorker.perform_at(@status.poll.expires_at, @status.poll.id) if @status.poll
+    ActivityPub::QuoteRequestWorker.perform_async(@status.quote.id) if @status.quote&.quoted_status.present? && !@status.quote&.quoted_status&.local?
+  end
+
+  def process_email_subscriptions!
+    return unless Rails.application.config.x.email_subscriptions && Setting.email_subscriptions &&
+                  @status.public_visibility? && (!@status.reply? || @status.in_reply_to_account_id == @status.account_id) &&
+                  @status.account.user_can?(:manage_email_subscriptions) &&
+                  @status.account.user_email_subscriptions_enabled?
+
+    # To allow e-mail grouping, pass the arguments via a redis set and schedule
+    # a unique worker a few minutes in the future, in case the user makes subsequent
+    # posts within that time window
+    redis.sadd("email_subscriptions:#{@status.account_id}:next_batch", @status.id)
+    redis.expire("email_subscriptions:#{@status.account_id}:next_batch", EMAIL_DISTRIBUTION_TTL)
+    EmailDistributionWorker.perform_in(EMAIL_DISTRIBUTION_DELAY, @status.account_id)
   end
 
   def validate_media!
@@ -152,7 +216,7 @@ class PostStatusService < BaseService
       return
     end
 
-    raise Mastodon::ValidationError, I18n.t('media_attachments.validations.too_many') if @options[:media_ids].size > Status::MEDIA_ATTACHMENTS_LIMIT || @options[:poll].present?
+    raise Mastodon::ValidationError, I18n.t('media_attachments.validations.too_many') if @options[:media_ids].size > Status::MEDIA_ATTACHMENTS_LIMIT
 
     @media = @account.media_attachments.where(status_id: nil).where(id: @options[:media_ids].take(Status::MEDIA_ATTACHMENTS_LIMIT).map(&:to_i))
 
@@ -195,6 +259,18 @@ class PostStatusService < BaseService
     @idempotency_duplicate = redis.get(idempotency_key)
   end
 
+  def with_idempotency
+    return yield unless idempotency_given?
+
+    with_redis_lock("idempotency:lock:status:#{@account.id}:#{@options[:idempotency]}") do
+      raise IdempotencyError, idempotency_duplicate if idempotency_duplicate?
+
+      yield
+
+      redis.setex(idempotency_key, 3_600, @status.id)
+    end
+  end
+
   def scheduled_in_the_past?
     @scheduled_at.present? && @scheduled_at <= Time.now.utc
   end
@@ -218,7 +294,9 @@ class PostStatusService < BaseService
       language: valid_locale_cascade(@options[:language], @account.user&.preferred_posting_language, I18n.default_locale),
       application: @options[:application],
       content_type: @options[:content_type] || @account.user&.setting_default_content_type,
+      local_only: @options[:local_only],
       rate_limit: @options[:with_rate_limit],
+      quote_approval_policy: @options[:quote_approval_policy],
     }.compact
   end
 
@@ -240,6 +318,7 @@ class PostStatusService < BaseService
     @options.dup.tap do |options_hash|
       options_hash[:in_reply_to_id]  = options_hash.delete(:thread)&.id
       options_hash[:application_id]  = options_hash.delete(:application)&.id
+      options_hash[:quoted_status_id] = options_hash.delete(:quoted_status)&.id
       options_hash[:scheduled_at]    = nil
       options_hash[:idempotency]     = nil
       options_hash[:with_rate_limit] = false

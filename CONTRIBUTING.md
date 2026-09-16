@@ -50,6 +50,8 @@ You can contribute in the following ways:
 
 Please review the org-level [contribution guidelines] for high-level acceptance
 criteria guidance and the [DEVELOPMENT] guide for environment-specific details.
+You should also read the project's [AI Contribution Policy] to understand how we approach
+AI-assisted contributions.
 
 ## API Changes and Additions
 
@@ -61,6 +63,11 @@ request on our [documentation repository].
 Bug reports and feature suggestions must use descriptive and concise titles and
 be submitted to [GitHub Issues]. Please use the search function to make sure
 there are not duplicate bug reports or feature requests.
+
+## Security Issues
+
+If you believe you have identified a security issue in Mastodon or our own apps,
+check [SECURITY].
 
 ## Translations
 
@@ -75,7 +82,7 @@ reviewed and merged into the codebase.
 
 Our time is limited and PRs making large, unsolicited changes are unlikely to
 get a response. Changes which link to an existing confirmed issue, or which come
-from a "help wanted" issue or other request are more likely to be reviewed.
+from a "help wanted" issue or other request, are more likely to be reviewed.
 
 The smaller and more narrowly focused the changes in a PR are, the easier they
 are to review and potentially merge. If the change only makes sense in some
@@ -105,7 +112,7 @@ Example:
 Pull requests that do not pass automated checks on CI may not be reviewed. In
 particular, please keep in mind:
 
-- Unit and integration tests (rspec, jest)
+- Unit and integration tests (rspec, vitest)
 - Code style rules (rubocop, eslint)
 - Normalization of locale files (i18n-tasks)
 - Relevant accessibility or performance concerns
@@ -124,3 +131,5 @@ and API docs. Improvements are made via PRs to the [documentation repository].
 [GitHub Issues]: https://github.com/mastodon/mastodon/issues
 [keepachangelog]: https://keepachangelog.com/en/1.0.0/
 [Mastodon documentation]: https://docs.joinmastodon.org
+[SECURITY]: SECURITY.md
+[AI Contribution Policy]: https://github.com/mastodon/.github/blob/main/AI_POLICY.md

@@ -1,9 +1,14 @@
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useEffect } from 'react';
 
 import { useIntl, defineMessages, FormattedMessage } from 'react-intl';
 
-import { Helmet } from 'react-helmet';
+import { Helmet } from '@unhead/react/helmet';
 
+import { Column } from '@/flavours/glitch/components/column';
+import { ColumnHeader as LegacyColumnHeader } from '@/flavours/glitch/components/column/header';
+import { ColumnHeader } from '@/flavours/glitch/components/column_header';
+import { isRedesignEnabled } from '@/flavours/glitch/utils/environment';
+import CollectionsIcon from '@/material-icons/400-24px/category.svg?react';
 import FindInPageIcon from '@/material-icons/400-24px/find_in_page.svg?react';
 import PeopleIcon from '@/material-icons/400-24px/group.svg?react';
 import SearchIcon from '@/material-icons/400-24px/search.svg?react';
@@ -11,17 +16,16 @@ import TagIcon from '@/material-icons/400-24px/tag.svg?react';
 import { submitSearch, expandSearch } from 'flavours/glitch/actions/search';
 import type { ApiSearchType } from 'flavours/glitch/api_types/search';
 import { Account } from 'flavours/glitch/components/account';
-import { Column } from 'flavours/glitch/components/column';
-import type { ColumnRef } from 'flavours/glitch/components/column';
-import { ColumnHeader } from 'flavours/glitch/components/column_header';
 import { CompatibilityHashtag as Hashtag } from 'flavours/glitch/components/hashtag';
 import { Icon } from 'flavours/glitch/components/icon';
 import ScrollableList from 'flavours/glitch/components/scrollable_list';
-import Status from 'flavours/glitch/containers/status_container';
+import { StatusQuoteManager } from 'flavours/glitch/components/status_quoted';
 import { Search } from 'flavours/glitch/features/compose/components/search';
 import { useSearchParam } from 'flavours/glitch/hooks/useSearchParam';
 import type { Hashtag as HashtagType } from 'flavours/glitch/models/tags';
 import { useAppDispatch, useAppSelector } from 'flavours/glitch/store';
+
+import { CollectionListItem } from '../collections/components/collection_list_item';
 
 import { SearchSection } from './components/search_section';
 
@@ -44,7 +48,9 @@ const hidePeek = <T,>(list: T[]) => {
 };
 
 const renderAccounts = (accountIds: string[]) =>
-  hidePeek<string>(accountIds).map((id) => <Account key={id} id={id} />);
+  hidePeek<string>(accountIds).map((id) => (
+    <Account key={id} id={id} reference='search' />
+  ));
 
 const renderHashtags = (hashtags: HashtagType[]) =>
   hidePeek<HashtagType>(hashtags).map((hashtag) => (
@@ -53,8 +59,7 @@ const renderHashtags = (hashtags: HashtagType[]) =>
 
 const renderStatuses = (statusIds: string[]) =>
   hidePeek<string>(statusIds).map((id) => (
-    // @ts-expect-error inferred props are wrong
-    <Status key={id} id={id} />
+    <StatusQuoteManager contextType='search' key={id} id={id} />
   ));
 
 type SearchType = 'all' | ApiSearchType;
@@ -70,7 +75,6 @@ const typeFromParam = (param?: string): SearchType => {
 export const SearchResults: React.FC<{ multiColumn: boolean }> = ({
   multiColumn,
 }) => {
-  const columnRef = useRef<ColumnRef>(null);
   const intl = useIntl();
   const [q] = useSearchParam('q');
   const [type, setType] = useSearchParam('type');
@@ -90,10 +94,6 @@ export const SearchResults: React.FC<{ multiColumn: boolean }> = ({
       );
     }
   }, [dispatch, trimmedValue, mappedType]);
-
-  const handleHeaderClick = useCallback(() => {
-    columnRef.current?.scrollTop();
-  }, []);
 
   const handleSelectAll = useCallback(() => {
     setType(null);
@@ -132,7 +132,8 @@ export const SearchResults: React.FC<{ multiColumn: boolean }> = ({
         filteredResults =
           results.accounts.length +
             results.hashtags.length +
-            results.statuses.length >
+            results.statuses.length +
+            results.collections.length >
           0 ? (
             <>
               {results.accounts.length > 0 && (
@@ -152,6 +153,32 @@ export const SearchResults: React.FC<{ multiColumn: boolean }> = ({
                   {results.accounts.slice(0, INITIAL_DISPLAY).map((id) => (
                     <Account key={id} id={id} />
                   ))}
+                </SearchSection>
+              )}
+
+              {results.collections.length > 0 && (
+                <SearchSection
+                  key='collections'
+                  title={
+                    <>
+                      <Icon id='collections' icon={CollectionsIcon} />
+                      <FormattedMessage
+                        id='search_results.collections'
+                        defaultMessage='Collections'
+                      />
+                    </>
+                  }
+                >
+                  {results.collections
+                    .slice(0, INITIAL_DISPLAY)
+                    .map((collection, index, array) => (
+                      <CollectionListItem
+                        key={collection.id}
+                        collection={collection}
+                        listSize={array.length}
+                        positionInList={index + 1}
+                      />
+                    ))}
                 </SearchSection>
               )}
 
@@ -190,8 +217,7 @@ export const SearchResults: React.FC<{ multiColumn: boolean }> = ({
                   onClickMore={handleSelectStatuses}
                 >
                   {results.statuses.slice(0, INITIAL_DISPLAY).map((id) => (
-                    // @ts-expect-error inferred props are wrong
-                    <Status key={id} id={id} />
+                    <StatusQuoteManager contextType='search' key={id} id={id} />
                   ))}
                 </SearchSection>
               )}
@@ -212,34 +238,24 @@ export const SearchResults: React.FC<{ multiColumn: boolean }> = ({
     }
   }
 
-  return (
-    <Column
-      bindToDocument={!multiColumn}
-      ref={columnRef}
-      label={intl.formatMessage(messages.title, { q })}
-    >
-      <ColumnHeader
-        icon={'search'}
-        iconComponent={SearchIcon}
-        title={intl.formatMessage(messages.title, { q })}
-        onClick={handleHeaderClick}
-        multiColumn={multiColumn}
-      />
-
+  const extraStickyHeaderContent = (
+    <>
       <div className='explore__search-header'>
-        <Search singleColumn initialValue={trimmedValue} />
+        <Search singleColumn initialValue={trimmedValue} key={trimmedValue} />
       </div>
 
       <div className='account__section-headline'>
         <button
           onClick={handleSelectAll}
           className={mappedType === 'all' ? 'active' : undefined}
+          type='button'
         >
           <FormattedMessage id='search_results.all' defaultMessage='All' />
         </button>
         <button
           onClick={handleSelectAccounts}
           className={mappedType === 'accounts' ? 'active' : undefined}
+          type='button'
         >
           <FormattedMessage
             id='search_results.accounts'
@@ -249,6 +265,7 @@ export const SearchResults: React.FC<{ multiColumn: boolean }> = ({
         <button
           onClick={handleSelectHashtags}
           className={mappedType === 'hashtags' ? 'active' : undefined}
+          type='button'
         >
           <FormattedMessage
             id='search_results.hashtags'
@@ -258,6 +275,7 @@ export const SearchResults: React.FC<{ multiColumn: boolean }> = ({
         <button
           onClick={handleSelectStatuses}
           className={mappedType === 'statuses' ? 'active' : undefined}
+          type='button'
         >
           <FormattedMessage
             id='search_results.statuses'
@@ -265,6 +283,28 @@ export const SearchResults: React.FC<{ multiColumn: boolean }> = ({
           />
         </button>
       </div>
+    </>
+  );
+
+  const pageTitle = intl.formatMessage(messages.title, { q });
+
+  return (
+    <Column bindToDocument={!multiColumn} label={pageTitle}>
+      {isRedesignEnabled() ? (
+        <ColumnHeader
+          title={pageTitle}
+          extraStickyContent={extraStickyHeaderContent}
+        />
+      ) : (
+        <LegacyColumnHeader
+          icon={'search'}
+          iconComponent={SearchIcon}
+          title={pageTitle}
+          multiColumn={multiColumn}
+          scrollTopOnClick
+          appendContent={extraStickyHeaderContent}
+        />
+      )}
 
       <div className='explore__search-results' data-nosnippet>
         <ScrollableList
@@ -293,7 +333,7 @@ export const SearchResults: React.FC<{ multiColumn: boolean }> = ({
       </div>
 
       <Helmet>
-        <title>{intl.formatMessage(messages.title, { q })}</title>
+        <title>{pageTitle}</title>
         <meta name='robots' content='noindex' />
       </Helmet>
     </Column>

@@ -123,16 +123,14 @@ RSpec.describe ActivityPub::FetchAllRepliesWorker do
   end
 
   before do
-    stub_const('Status::FetchRepliesConcern::FETCH_REPLIES_ENABLED', true)
-    allow(FetchReplyWorker).to receive(:push_bulk)
     all_items.each do |item|
       next if [top_note_uri, reply_note_uri].include? item
 
-      stub_request(:get, item).to_return(status: 200, body: Oj.dump(empty_object), headers: { 'Content-Type': 'application/activity+json' })
+      stub_request(:get, item).to_return(status: 200, body: empty_object.to_json, headers: { 'Content-Type': 'application/activity+json' })
     end
 
-    stub_request(:get, top_note_uri).to_return(status: 200, body: Oj.dump(top_object), headers: { 'Content-Type': 'application/activity+json' })
-    stub_request(:get, reply_note_uri).to_return(status: 200, body: Oj.dump(reply_object), headers: { 'Content-Type': 'application/activity+json' })
+    stub_request(:get, top_note_uri).to_return(status: 200, body: top_object.to_json, headers: { 'Content-Type': 'application/activity+json' })
+    stub_request(:get, reply_note_uri).to_return(status: 200, body: reply_object.to_json, headers: { 'Content-Type': 'application/activity+json' })
   end
 
   shared_examples 'fetches all replies' do
@@ -145,6 +143,12 @@ RSpec.describe ActivityPub::FetchAllRepliesWorker do
       stub_const('ActivityPub::FetchAllRepliesWorker::MAX_REPLIES', 5)
       got_uris = subject.perform(status.id)
       expect(got_uris).to match_array(top_items + top_items_paged)
+    end
+
+    it 'fetches the top status only once' do
+      _ = subject.perform(status.id, { request_id: 0 })
+      expect(FetchReplyWorker).to have_enqueued_sidekiq_job(top_note_uri, { 'prefetched_body' => top_object.deep_stringify_keys, 'request_id' => 0 })
+      expect(a_request(:get, top_note_uri)).to have_been_made.once
     end
   end
 
@@ -176,8 +180,8 @@ RSpec.describe ActivityPub::FetchAllRepliesWorker do
       end
 
       before do
-        stub_request(:get, top_collection_uri).to_return(status: 200, body: Oj.dump(replies_top), headers: { 'Content-Type': 'application/activity+json' })
-        stub_request(:get, reply_collection_uri).to_return(status: 200, body: Oj.dump(replies_nested), headers: { 'Content-Type': 'application/activity+json' })
+        stub_request(:get, top_collection_uri).to_return(status: 200, body: replies_top.to_json, headers: { 'Content-Type': 'application/activity+json' })
+        stub_request(:get, reply_collection_uri).to_return(status: 200, body: replies_nested.to_json, headers: { 'Content-Type': 'application/activity+json' })
       end
 
       it_behaves_like 'fetches all replies'
@@ -250,8 +254,8 @@ RSpec.describe ActivityPub::FetchAllRepliesWorker do
       end
 
       before do
-        stub_request(:get, top_page_2_uri).to_return(status: 200, body: Oj.dump(top_page_two), headers: { 'Content-Type': 'application/activity+json' })
-        stub_request(:get, reply_page_2_uri).to_return(status: 200, body: Oj.dump(reply_page_two), headers: { 'Content-Type': 'application/activity+json' })
+        stub_request(:get, top_page_2_uri).to_return(status: 200, body: top_page_two.to_json, headers: { 'Content-Type': 'application/activity+json' })
+        stub_request(:get, reply_page_2_uri).to_return(status: 200, body: reply_page_two.to_json, headers: { 'Content-Type': 'application/activity+json' })
       end
 
       it_behaves_like 'fetches all replies'

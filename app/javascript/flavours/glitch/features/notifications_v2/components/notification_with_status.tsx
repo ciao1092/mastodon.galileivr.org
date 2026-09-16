@@ -2,8 +2,7 @@ import { useMemo } from 'react';
 
 import classNames from 'classnames';
 
-import { HotKeys } from 'react-hotkeys';
-
+import { LinkedDisplayName } from '@/flavours/glitch/components/display_name';
 import { replyComposeById } from 'flavours/glitch/actions/compose';
 import {
   toggleReblog,
@@ -13,13 +12,13 @@ import {
   navigateToStatus,
   toggleStatusSpoilers,
 } from 'flavours/glitch/actions/statuses';
+import { Hotkeys } from 'flavours/glitch/components/hotkeys';
 import type { IconProp } from 'flavours/glitch/components/icon';
 import { Icon } from 'flavours/glitch/components/icon';
-import Status from 'flavours/glitch/containers/status_container';
+import { StatusQuoteManager } from 'flavours/glitch/components/status_quoted';
 import { getStatusHidden } from 'flavours/glitch/selectors/filters';
 import { useAppSelector, useAppDispatch } from 'flavours/glitch/store';
 
-import { DisplayedName } from './displayed_name';
 import type { LabelRenderer } from './notification_group_with_status';
 
 export const NotificationWithStatus: React.FC<{
@@ -43,9 +42,16 @@ export const NotificationWithStatus: React.FC<{
 }) => {
   const dispatch = useAppDispatch();
 
+  const account = useAppSelector((state) =>
+    state.accounts.get(accountIds.at(0) ?? ''),
+  );
   const label = useMemo(
-    () => labelRenderer(<DisplayedName accountIds={accountIds} />, count),
-    [labelRenderer, accountIds, count],
+    () =>
+      labelRenderer(
+        <LinkedDisplayName displayProps={{ account, variant: 'simple' }} />,
+        count,
+      ),
+    [labelRenderer, account, count],
   );
 
   const isPrivateMention = useAppSelector(
@@ -87,7 +93,7 @@ export const NotificationWithStatus: React.FC<{
   if (!statusId || isFiltered) return null;
 
   return (
-    <HotKeys handlers={handlers}>
+    <Hotkeys handlers={handlers}>
       <div
         role='button'
         className={classNames(
@@ -99,15 +105,14 @@ export const NotificationWithStatus: React.FC<{
         )}
         tabIndex={0}
       >
-        <div className='notification-ungrouped__header'>
+        <h2 className='notification-ungrouped__header'>
           <div className='notification-ungrouped__header__icon'>
             <Icon icon={icon} id={iconId} />
           </div>
-          {label}
-        </div>
+          <span>{label}</span>
+        </h2>
 
-        <Status
-          // @ts-expect-error -- <Status> is not yet typed
+        <StatusQuoteManager
           id={statusId}
           contextType='notifications'
           withDismiss
@@ -116,6 +121,6 @@ export const NotificationWithStatus: React.FC<{
           unfocusable
         />
       </div>
-    </HotKeys>
+    </Hotkeys>
   );
 };

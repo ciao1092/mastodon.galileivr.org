@@ -1,9 +1,9 @@
 import PropTypes from 'prop-types';
-import { useRef, useCallback, useEffect } from 'react';
+import { useCallback, useEffect } from 'react';
 
 import { defineMessages, useIntl, FormattedMessage } from 'react-intl';
 
-import { Helmet } from 'react-helmet';
+import { Helmet } from '@unhead/react/helmet';
 
 import { useSelector, useDispatch } from 'react-redux';
 
@@ -17,13 +17,16 @@ import {
   acceptNotificationRequest,
   dismissNotificationRequest,
 } from 'flavours/glitch/actions/notification_requests';
-import Column from 'flavours/glitch/components/column';
-import ColumnHeader from 'flavours/glitch/components/column_header';
+import { Column } from '@/flavours/glitch/components/column';
+import { ColumnHeader as LegacyColumnHeader } from '@/flavours/glitch/components/column/header';
 import { IconButton } from 'flavours/glitch/components/icon_button';
 import ScrollableList from 'flavours/glitch/components/scrollable_list';
 import { SensitiveMediaContextProvider } from 'flavours/glitch/features/ui/util/sensitive_media_context';
 
 import NotificationContainer from './containers/notification_container';
+import { isRedesignEnabled } from '@/flavours/glitch/utils/environment';
+import { ColumnHeader, ColumnHeaderButton } from '@/flavours/glitch/components/column_header';
+import { CheckIcon, XIcon } from '@phosphor-icons/react';
 
 const messages = defineMessages({
   title: { id: 'notification_requests.notifications_from', defaultMessage: 'Notifications from {name}' },
@@ -31,23 +34,7 @@ const messages = defineMessages({
   dismiss: { id: 'notification_requests.dismiss', defaultMessage: 'Dismiss' },
 });
 
-const selectChild = (ref, index, alignTop) => {
-  const container = ref.current.node;
-  const element = container.querySelector(`article:nth-of-type(${index + 1}) .focusable`);
-
-  if (element) {
-    if (alignTop && container.scrollTop > element.offsetTop) {
-      element.scrollIntoView(true);
-    } else if (!alignTop && container.scrollTop + container.clientHeight < element.offsetTop + element.offsetHeight) {
-      element.scrollIntoView(false);
-    }
-
-    element.focus();
-  }
-};
-
 export const NotificationRequest = ({ multiColumn, params: { id } }) => {
-  const columnRef = useRef();
   const intl = useIntl();
   const dispatch = useDispatch();
   const notificationRequest = useSelector(state => state.notificationRequests.current.item?.id === id ? state.notificationRequests.current.item : null);
@@ -57,10 +44,6 @@ export const NotificationRequest = ({ multiColumn, params: { id } }) => {
   const isLoading = useSelector(state => state.notificationRequests.current.notifications.isLoading);
   const hasMore = useSelector(state => !!state.notificationRequests.current.notifications.next);
   const removed = useSelector(state => state.notificationRequests.current.removed);
-
-  const handleHeaderClick = useCallback(() => {
-    columnRef.current?.scrollTop();
-  }, [columnRef]);
 
   const handleLoadMore = useCallback(() => {
     dispatch(expandNotificationsForRequest({ accountId }));
@@ -73,16 +56,6 @@ export const NotificationRequest = ({ multiColumn, params: { id } }) => {
   const handleAccept = useCallback(() => {
     dispatch(acceptNotificationRequest({ id }));
   }, [dispatch, id]);
-
-  const handleMoveUp = useCallback(id => {
-    const elementIndex = notifications.findIndex(item => item !== null && item.get('id') === id) - 1;
-    selectChild(columnRef, elementIndex, true);
-  }, [columnRef, notifications]);
-
-  const handleMoveDown = useCallback(id => {
-    const elementIndex = notifications.findIndex(item => item !== null && item.get('id') === id) + 1;
-    selectChild(columnRef, elementIndex, false);
-  }, [columnRef, notifications]);
 
   useEffect(() => {
     dispatch(fetchNotificationRequest({ id }));
@@ -114,21 +87,42 @@ export const NotificationRequest = ({ multiColumn, params: { id } }) => {
   }
 
   return (
-    <Column bindToDocument={!multiColumn} ref={columnRef} label={columnTitle}>
-      <ColumnHeader
-        icon='archive'
-        iconComponent={InventoryIcon}
-        title={columnTitle}
-        onClick={handleHeaderClick}
-        multiColumn={multiColumn}
-        showBackButton
-        extraButton={!removed && (
-          <>
-            <IconButton className='column-header__button' iconComponent={DeleteIcon} onClick={handleDismiss} title={intl.formatMessage(messages.dismiss)} />
-            <IconButton className='column-header__button' iconComponent={DoneIcon} onClick={handleAccept} title={intl.formatMessage(messages.accept)} />
-          </>
-        )}
-      />
+    <Column bindToDocument={!multiColumn} label={columnTitle}>
+      {isRedesignEnabled() ? (
+        <ColumnHeader
+          withBackButton
+          title={columnTitle}
+          extraButtons={
+            <>
+              <ColumnHeaderButton icon={XIcon} onClick={handleDismiss}>
+                {intl.formatMessage(messages.dismiss)}
+              </ColumnHeaderButton>
+              <ColumnHeaderButton
+                icon={CheckIcon}
+                variant='solid'
+                onClick={handleAccept}
+              >
+                {intl.formatMessage(messages.accept)}
+              </ColumnHeaderButton>
+            </>
+          }
+        />
+      ) : (
+        <LegacyColumnHeader
+          icon='archive'
+          iconComponent={InventoryIcon}
+          title={columnTitle}
+          multiColumn={multiColumn}
+          showBackButton
+          scrollTopOnClick
+          extraButton={!removed && (
+            <>
+              <IconButton className='column-header__button' iconComponent={DeleteIcon} onClick={handleDismiss} title={intl.formatMessage(messages.dismiss)} />
+              <IconButton className='column-header__button' iconComponent={DoneIcon} onClick={handleAccept} title={intl.formatMessage(messages.accept)} />
+            </>
+          )}
+        />
+      )}
 
       <SensitiveMediaContextProvider hideMediaByDefault>
         <ScrollableList
@@ -146,8 +140,6 @@ export const NotificationRequest = ({ multiColumn, params: { id } }) => {
               key={item.get('id')}
               notification={item}
               accountId={item.get('account')}
-              onMoveUp={handleMoveUp}
-              onMoveDown={handleMoveDown}
             />
           ))}
         </ScrollableList>
