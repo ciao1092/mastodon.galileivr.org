@@ -1,11 +1,13 @@
 import PropTypes from 'prop-types';
 import { PureComponent } from 'react';
 
-import { injectIntl, defineMessages } from 'react-intl';
+import { defineMessages } from 'react-intl';
 
 import classNames from 'classnames';
 
 import api from 'flavours/glitch/api';
+
+import { injectIntl } from '../intl';
 
 const messages = defineMessages({
   legal: { id: 'report.categories.legal', defaultMessage: 'Legal' },
@@ -105,7 +107,7 @@ class ReportReasonSelector extends PureComponent {
   };
 
   componentDidMount() {
-    api(false).get('/api/v1/instance').then(res => {
+    api(false).get('/api/v2/instance').then(res => {
       this.setState({
         rules: res.data.rules,
       });

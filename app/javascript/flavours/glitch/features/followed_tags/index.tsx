@@ -1,25 +1,28 @@
-import { useEffect, useState, useCallback, useRef } from 'react';
+import { useEffect, useCallback } from 'react';
 
 import { defineMessages, useIntl, FormattedMessage } from 'react-intl';
 
-import { Helmet } from 'react-helmet';
-
 import { isFulfilled } from '@reduxjs/toolkit';
 
+import { Helmet } from '@unhead/react/helmet';
+
+import { Column } from '@/flavours/glitch/components/column';
+import { ColumnHeader as LegacyColumnHeader } from '@/flavours/glitch/components/column/header';
+import { ColumnHeader } from '@/flavours/glitch/components/column_header';
+import { isRedesignEnabled } from '@/flavours/glitch/utils/environment';
 import TagIcon from '@/material-icons/400-24px/tag.svg?react';
-import { unfollowHashtag } from 'flavours/glitch/actions/tags_typed';
-import { apiGetFollowedTags } from 'flavours/glitch/api/tags';
+import {
+  fetchFollowedHashtags,
+  unfollowHashtag,
+} from 'flavours/glitch/actions/tags_typed';
 import type { ApiHashtagJSON } from 'flavours/glitch/api_types/tags';
 import { Button } from 'flavours/glitch/components/button';
-import { Column } from 'flavours/glitch/components/column';
-import type { ColumnRef } from 'flavours/glitch/components/column';
-import { ColumnHeader } from 'flavours/glitch/components/column_header';
 import { Hashtag } from 'flavours/glitch/components/hashtag';
 import ScrollableList from 'flavours/glitch/components/scrollable_list';
-import { useAppDispatch } from 'flavours/glitch/store';
+import { useAppDispatch, useAppSelector } from 'flavours/glitch/store';
 
 const messages = defineMessages({
-  heading: { id: 'followed_tags', defaultMessage: 'Followed hashtags' },
+  heading: { id: 'followed_tags', defaultMessage: 'Followed Hashtags' },
 });
 
 const FollowedTag: React.FC<{
@@ -59,58 +62,30 @@ const FollowedTag: React.FC<{
 
 const FollowedTags: React.FC<{ multiColumn: boolean }> = ({ multiColumn }) => {
   const intl = useIntl();
-  const [tags, setTags] = useState<ApiHashtagJSON[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [next, setNext] = useState<string | undefined>();
+  const dispatch = useAppDispatch();
+  const { tags, loading, next, stale } = useAppSelector(
+    (state) => state.followedTags,
+  );
   const hasMore = !!next;
-  const columnRef = useRef<ColumnRef>(null);
 
   useEffect(() => {
-    setLoading(true);
-
-    void apiGetFollowedTags()
-      .then(({ tags, links }) => {
-        const next = links.refs.find((link) => link.rel === 'next');
-
-        setTags(tags);
-        setLoading(false);
-        setNext(next?.uri);
-
-        return '';
-      })
-      .catch(() => {
-        setLoading(false);
-      });
-  }, [setTags, setLoading, setNext]);
+    if (stale) {
+      void dispatch(fetchFollowedHashtags());
+    }
+  }, [dispatch, stale]);
 
   const handleLoadMore = useCallback(() => {
-    setLoading(true);
-
-    void apiGetFollowedTags(next)
-      .then(({ tags, links }) => {
-        const next = links.refs.find((link) => link.rel === 'next');
-
-        setLoading(false);
-        setTags((previousTags) => [...previousTags, ...tags]);
-        setNext(next?.uri);
-
-        return '';
-      })
-      .catch(() => {
-        setLoading(false);
-      });
-  }, [setTags, setLoading, setNext, next]);
+    if (next) {
+      void dispatch(fetchFollowedHashtags({ next }));
+    }
+  }, [dispatch, next]);
 
   const handleUnfollow = useCallback(
     (tagId: string) => {
-      setTags((tags) => tags.filter((tag) => tag.name !== tagId));
+      void dispatch(unfollowHashtag({ tagId }));
     },
-    [setTags],
+    [dispatch],
   );
-
-  const handleHeaderClick = useCallback(() => {
-    columnRef.current?.scrollTop();
-  }, []);
 
   const emptyMessage = (
     <FormattedMessage
@@ -122,17 +97,23 @@ const FollowedTags: React.FC<{ multiColumn: boolean }> = ({ multiColumn }) => {
   return (
     <Column
       bindToDocument={!multiColumn}
-      ref={columnRef}
       label={intl.formatMessage(messages.heading)}
     >
-      <ColumnHeader
-        icon='hashtag'
-        iconComponent={TagIcon}
-        title={intl.formatMessage(messages.heading)}
-        onClick={handleHeaderClick}
-        multiColumn={multiColumn}
-        showBackButton
-      />
+      {isRedesignEnabled() ? (
+        <ColumnHeader
+          withBackButton
+          title={intl.formatMessage(messages.heading)}
+        />
+      ) : (
+        <LegacyColumnHeader
+          icon='hashtag'
+          iconComponent={TagIcon}
+          title={intl.formatMessage(messages.heading)}
+          multiColumn={multiColumn}
+          showBackButton
+          scrollTopOnClick
+        />
+      )}
 
       <ScrollableList
         scrollKey='followed_tags'

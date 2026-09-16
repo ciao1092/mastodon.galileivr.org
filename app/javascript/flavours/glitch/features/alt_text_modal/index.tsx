@@ -15,10 +15,6 @@ import type { List as ImmutableList, Map as ImmutableMap } from 'immutable';
 import { useSpring, animated } from '@react-spring/web';
 import Textarea from 'react-textarea-autosize';
 import { length } from 'stringz';
-// eslint-disable-next-line import/extensions
-import tesseractWorkerPath from 'tesseract.js/dist/worker.min.js';
-// eslint-disable-next-line import/no-extraneous-dependencies
-import tesseractCorePath from 'tesseract.js-core/tesseract-core.wasm.js';
 
 import { showAlertForError } from 'flavours/glitch/actions/alerts';
 import { uploadThumbnail } from 'flavours/glitch/actions/compose';
@@ -26,12 +22,13 @@ import { changeUploadCompose } from 'flavours/glitch/actions/compose_typed';
 import { Button } from 'flavours/glitch/components/button';
 import { GIFV } from 'flavours/glitch/components/gifv';
 import { LoadingIndicator } from 'flavours/glitch/components/loading_indicator';
+import { NavigationFocusTarget } from 'flavours/glitch/components/navigation_focus_target';
 import { Skeleton } from 'flavours/glitch/components/skeleton';
-import Audio from 'flavours/glitch/features/audio';
+import { Audio } from 'flavours/glitch/features/audio';
 import { CharacterCounter } from 'flavours/glitch/features/compose/components/character_counter';
 import { Tesseract as fetchTesseract } from 'flavours/glitch/features/ui/util/async-components';
 import { Video, getPointerPosition } from 'flavours/glitch/features/video';
-import { me, reduceMotion } from 'flavours/glitch/initial_state';
+import { me } from 'flavours/glitch/initial_state';
 import type { MediaAttachment } from 'flavours/glitch/models/media_attachment';
 import { useAppSelector, useAppDispatch } from 'flavours/glitch/store';
 import { assetHost } from 'flavours/glitch/utils/config';
@@ -58,7 +55,8 @@ const messages = defineMessages({
   },
 });
 
-const MAX_LENGTH = 1500;
+// TODO: use `description_limit` from the `/api/v2/instance` response
+const MAX_LENGTH = 10000;
 
 type FocalPoint = [number, number];
 
@@ -105,8 +103,9 @@ const Preview: React.FC<{
   position: FocalPoint;
   onPositionChange: (arg0: FocalPoint) => void;
 }> = ({ mediaId, position, onPositionChange }) => {
-  const draggingRef = useRef<boolean>(false);
-  const nodeRef = useRef<HTMLImageElement | HTMLVideoElement | null>(null);
+  const nodeRef = useRef<HTMLImageElement | HTMLVideoElement>(null);
+
+  const [dragging, setDragging] = useState<'started' | 'moving' | null>(null);
 
   const [x, y] = position;
   const style = useSpring({
@@ -114,7 +113,7 @@ const Preview: React.FC<{
       left: `${x * 100}%`,
       top: `${y * 100}%`,
     },
-    immediate: reduceMotion || draggingRef.current,
+    immediate: dragging === 'moving',
   });
   const media = useAppSelector((state) =>
     (
@@ -126,8 +125,6 @@ const Preview: React.FC<{
   const account = useAppSelector((state) =>
     me ? state.accounts.get(me) : undefined,
   );
-
-  const [dragging, setDragging] = useState(false);
 
   const setRef = useCallback(
     (e: HTMLImageElement | HTMLVideoElement | null) => {
@@ -144,20 +141,20 @@ const Preview: React.FC<{
 
       const handleMouseMove = (e: MouseEvent) => {
         const { x, y } = getPointerPosition(nodeRef.current, e);
-        draggingRef.current = true; // This will disable the animation for quicker feedback, only do this if the mouse actually moves
+
+        setDragging('moving'); // This will disable the animation for quicker feedback, only do this if the mouse actually moves
         onPositionChange([x, y]);
       };
 
       const handleMouseUp = () => {
-        setDragging(false);
-        draggingRef.current = false;
+        setDragging(null);
         document.removeEventListener('mouseup', handleMouseUp);
         document.removeEventListener('mousemove', handleMouseMove);
       };
 
       const { x, y } = getPointerPosition(nodeRef.current, e.nativeEvent);
 
-      setDragging(true);
+      setDragging('started');
       onPositionChange([x, y]);
 
       document.addEventListener('mouseup', handleMouseUp);
@@ -212,11 +209,11 @@ const Preview: React.FC<{
     return (
       <Audio
         src={media.get('url') as string}
-        duration={media.getIn(['meta', 'original', 'duration'], 0) as number}
         poster={
           (media.get('preview_url') as string | undefined) ??
           account?.avatar_static
         }
+        duration={media.getIn(['meta', 'original', 'duration'], 0) as number}
         backgroundColor={
           media.getIn(['meta', 'colors', 'background']) as string
         }
@@ -265,7 +262,9 @@ export const AltTextModal = forwardRef<ModalRef, Props & Partial<RestoreProps>>(
     );
     const lang = useAppSelector(
       (state) =>
-        (state.compose as ImmutableMap<string, unknown>).get('lang') as string,
+        (state.compose as ImmutableMap<string, unknown>).get(
+          'language',
+        ) as string,
     );
     const focusX =
       (media?.getIn(['meta', 'focus', 'x'], 0) as number | undefined) ?? 0;
@@ -286,6 +285,7 @@ export const AltTextModal = forwardRef<ModalRef, Props & Partial<RestoreProps>>(
     );
     const type = media?.get('type') as string;
     const valid = length(description) <= MAX_LENGTH;
+    const unattached = media?.get('unattached') as boolean | undefined;
 
     const handleDescriptionChange = useCallback(
       (e: React.ChangeEvent<HTMLTextAreaElement>) => {
@@ -332,7 +332,7 @@ export const AltTextModal = forwardRef<ModalRef, Props & Partial<RestoreProps>>(
         });
     }, [dispatch, setIsSaving, mediaId, onClose, position, description]);
 
-    const handleKeyUp = useCallback(
+    const handleKeyDown = useCallback(
       (e: React.KeyboardEvent) => {
         if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
           e.preventDefault();
@@ -350,9 +350,15 @@ export const AltTextModal = forwardRef<ModalRef, Props & Partial<RestoreProps>>(
 
       fetchTesseract()
         .then(async ({ createWorker }) => {
+          const [tesseractWorkerPath, tesseractCorePath] = await Promise.all([
+            // eslint-disable-next-line import/extensions
+            import('tesseract.js/dist/worker.min.js?url'),
+            // eslint-disable-next-line import/no-extraneous-dependencies
+            import('tesseract.js-core/tesseract-core.wasm.js?url'),
+          ]);
           const worker = await createWorker('eng', 1, {
-            workerPath: tesseractWorkerPath as string,
-            corePath: tesseractCorePath as string,
+            workerPath: tesseractWorkerPath.default,
+            corePath: tesseractCorePath.default,
             langPath: `${assetHost}/ocr/lang-data`,
             cacheMethod: 'write',
           });
@@ -407,12 +413,15 @@ export const AltTextModal = forwardRef<ModalRef, Props & Partial<RestoreProps>>(
             )}
           </Button>
 
-          <span className='dialog-modal__header__title'>
+          <NavigationFocusTarget
+            as='h1'
+            className='dialog-modal__header__title'
+          >
             <FormattedMessage
               id='alt_text_modal.add_alt_text'
               defaultMessage='Add alt text'
             />
-          </span>
+          </NavigationFocusTarget>
 
           <Button secondary onClick={onClose}>
             <FormattedMessage
@@ -430,7 +439,8 @@ export const AltTextModal = forwardRef<ModalRef, Props & Partial<RestoreProps>>(
               onPositionChange={handlePositionChange}
             />
 
-            {(type === 'audio' || type === 'video') && (
+            {/* This button is hidden for attached audio/video files, as they are already posted */}
+            {(type === 'audio' || type === 'video') && unattached && (
               <UploadButton
                 onSelectFile={handleThumbnailChange}
                 mimeTypes='image/jpeg,image/png,image/gif,image/heic,image/heif,image/webp,image/avif'
@@ -453,7 +463,7 @@ export const AltTextModal = forwardRef<ModalRef, Props & Partial<RestoreProps>>(
                   id='description'
                   value={isDetecting ? ' ' : description}
                   onChange={handleDescriptionChange}
-                  onKeyUp={handleKeyUp}
+                  onKeyDown={handleKeyDown}
                   lang={lang}
                   placeholder={intl.formatMessage(
                     type === 'audio'
@@ -485,6 +495,7 @@ export const AltTextModal = forwardRef<ModalRef, Props & Partial<RestoreProps>>(
                   className='link-button'
                   onClick={handleDetectClick}
                   disabled={type !== 'image' || isDetecting}
+                  type='button'
                 >
                   <FormattedMessage
                     id='alt_text_modal.add_text_from_image'
@@ -501,5 +512,4 @@ export const AltTextModal = forwardRef<ModalRef, Props & Partial<RestoreProps>>(
     );
   },
 );
-
 AltTextModal.displayName = 'AltTextModal';

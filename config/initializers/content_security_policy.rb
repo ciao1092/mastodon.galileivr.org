@@ -18,7 +18,6 @@ Rails.application.config.content_security_policy do |p|
   p.frame_ancestors :none
   p.font_src        :self, assets_host
   p.img_src         :self, :data, :blob, *media_hosts
-  p.style_src       :self, assets_host
   p.media_src       :self, :data, *media_hosts
   p.manifest_src    :self, assets_host
 
@@ -31,17 +30,21 @@ Rails.application.config.content_security_policy do |p|
   p.child_src  :self, :blob, assets_host
   p.worker_src :self, :blob, assets_host
 
-  if Rails.env.development?
-    webpacker_public_host = ENV.fetch('WEBPACKER_DEV_SERVER_PUBLIC', Webpacker.config.dev_server[:public])
-    front_end_build_urls = %w(ws http).map { |protocol| "#{protocol}#{Webpacker.dev_server.https? ? 's' : ''}://#{webpacker_public_host}" }
+  p.connect_src :self, :data, :blob, *media_hosts, Rails.configuration.x.streaming_api_base_url
+  p.script_src  :self, assets_host, "'wasm-unsafe-eval'"
+  p.frame_src   :self, :https
+  p.style_src   :self, assets_host
+
+  next unless Rails.env.development?
+
+  Rails.application.config.to_prepare do
+    vite_public_host = "#{Vite.config.host}:#{Vite.config.port}"
+    front_end_build_urls = %w(ws http).map { |protocol| "#{protocol}#{'s' if Vite.config.https?}://#{vite_public_host}" }
 
     p.connect_src :self, :data, :blob, *media_hosts, Rails.configuration.x.streaming_api_base_url, *front_end_build_urls
     p.script_src  :self, :unsafe_inline, :unsafe_eval, assets_host
     p.frame_src   :self, :https, :http
-  else
-    p.connect_src :self, :data, :blob, *media_hosts, Rails.configuration.x.streaming_api_base_url
-    p.script_src  :self, assets_host, "'wasm-unsafe-eval'"
-    p.frame_src   :self, :https
+    p.style_src   :self, assets_host, :unsafe_inline
   end
 end
 

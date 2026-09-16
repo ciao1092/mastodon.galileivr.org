@@ -1,72 +1,107 @@
-import { useEffect } from 'react';
+import { useCallback, useEffect } from 'react';
 
 import { FormattedMessage } from 'react-intl';
 
-import { useParams } from 'react-router';
+import { useHistory } from 'react-router';
 
-import type { Map as ImmutableMap } from 'immutable';
 import { List as ImmutableList } from 'immutable';
 
-import { fetchFeaturedTags } from 'mastodon/actions/featured_tags';
-import { expandAccountFeaturedTimeline } from 'mastodon/actions/timelines';
-import { ColumnBackButton } from 'mastodon/components/column_back_button';
-import { LoadingIndicator } from 'mastodon/components/loading_indicator';
-import { RemoteHint } from 'mastodon/components/remote_hint';
-import StatusContainer from 'mastodon/containers/status_container';
-import { useAccountId } from 'mastodon/hooks/useAccountId';
-import { useAccountVisibility } from 'mastodon/hooks/useAccountVisibility';
-import { useAppDispatch, useAppSelector } from 'mastodon/store';
+import { fetchEndorsedAccounts } from '@/mastodon/actions/accounts';
+import { AccountHeader } from '@/mastodon/components/account_header';
+import { AccountListItem } from '@/mastodon/components/account_list_item';
+import { Column } from '@/mastodon/components/column';
+import { ColumnBackButton } from '@/mastodon/components/column/back_button';
+import { LoadingIndicator } from '@/mastodon/components/loading_indicator';
+import { RemoteHint } from '@/mastodon/components/remote_hint';
+import {
+  Article,
+  ItemList,
+  Scrollable,
+} from '@/mastodon/components/scrollable_list/components';
+import type { TruncatedListItemInfo } from '@/mastodon/components/truncated_list';
+import { TruncatedListItems } from '@/mastodon/components/truncated_list';
+import { BundleColumnError } from '@/mastodon/features/ui/components/bundle_column_error';
+import { useAccount } from '@/mastodon/hooks/useAccount';
+import { useAccountId } from '@/mastodon/hooks/useAccountId';
+import { useAccountVisibility } from '@/mastodon/hooks/useAccountVisibility';
+import { me } from '@/mastodon/initial_state';
+import { useAppDispatch, useAppSelector } from '@/mastodon/store';
+import AddIcon from '@/material-icons/400-24px/add.svg?react';
 
-import { AccountHeader } from '../account_timeline/components/account_header';
-import Column from '../ui/components/column';
+import { CollectionListItem } from '../collections/components/collection_list_item';
+import { useCollectionsCreatedBy } from '../collections/overview/created_by_account';
 
 import { EmptyMessage } from './components/empty_message';
-import { FeaturedTag } from './components/featured_tag';
-import type { TagMap } from './components/featured_tag';
+import { Subheading, SubheadingLink } from './components/subheading';
 
-interface Params {
-  acct?: string;
-  id?: string;
-}
-
-const AccountFeatured = () => {
+const AccountFeatured: React.FC<{ multiColumn: boolean }> = ({
+  multiColumn,
+}) => {
   const accountId = useAccountId();
+  const account = useAccount(accountId);
   const { suspended, blockedBy, hidden } = useAccountVisibility(accountId);
   const forceEmptyState = suspended || blockedBy || hidden;
-  const { acct = '' } = useParams<Params>();
+  const isOwnProfile = accountId === me;
 
   const dispatch = useAppDispatch();
 
+  const history = useHistory();
+  useEffect(() => {
+    if (account && !account.show_featured) {
+      history.push(`/@${account.acct}`);
+    }
+  }, [account, history]);
+
   useEffect(() => {
     if (accountId) {
-      void dispatch(expandAccountFeaturedTimeline(accountId));
-      dispatch(fetchFeaturedTags(accountId));
+      void dispatch(fetchEndorsedAccounts({ accountId }));
     }
   }, [accountId, dispatch]);
 
-  const isLoading = useAppSelector(
-    (state) =>
-      !accountId ||
-      !!(state.timelines as ImmutableMap<string, unknown>).getIn([
-        `account:${accountId}:pinned`,
-        'isLoading',
-      ]) ||
-      !!state.user_lists.getIn(['featured_tags', accountId, 'isLoading']),
-  );
-  const featuredTags = useAppSelector(
+  const featuredAccountIds = useAppSelector(
     (state) =>
       state.user_lists.getIn(
-        ['featured_tags', accountId, 'items'],
-        ImmutableList(),
-      ) as ImmutableList<TagMap>,
-  );
-  const featuredStatusIds = useAppSelector(
-    (state) =>
-      (state.timelines as ImmutableMap<string, unknown>).getIn(
-        [`account:${accountId}:pinned`, 'items'],
+        ['featured_accounts', accountId, 'items'],
         ImmutableList(),
       ) as ImmutableList<string>,
   );
+  const { collections, status: collectionsLoadStatus } =
+    useCollectionsCreatedBy(accountId);
+
+  const { listedCollections = [], unlistedCollections = [] } = Object.groupBy(
+    collections,
+    (item) => (item.discoverable ? 'listedCollections' : 'unlistedCollections'),
+  );
+
+  const renderListItem = useCallback(
+    ({
+      item,
+      index,
+      totalListLength,
+      isLastElement,
+    }: TruncatedListItemInfo<(typeof listedCollections)[number]>) => (
+      <CollectionListItem
+        key={item.id}
+        collection={item}
+        withoutBorder={isLastElement}
+        withAuthorHandle={false}
+        positionInList={index}
+        listSize={totalListLength}
+      />
+    ),
+    [],
+  );
+
+  const hasCollections =
+    collectionsLoadStatus === 'idle' && listedCollections.length > 0;
+
+  const hasFeaturedAccounts = !featuredAccountIds.isEmpty();
+
+  const isLoading = !accountId || collectionsLoadStatus !== 'idle';
+
+  if (accountId === null) {
+    return <BundleColumnError multiColumn={multiColumn} errorType='routing' />;
+  }
 
   if (isLoading) {
     return (
@@ -78,7 +113,7 @@ const AccountFeatured = () => {
     );
   }
 
-  if (featuredStatusIds.isEmpty() && featuredTags.isEmpty()) {
+  if (!hasFeaturedAccounts && !hasCollections) {
     return (
       <AccountFeaturedWrapper accountId={accountId}>
         <EmptyMessage
@@ -96,43 +131,85 @@ const AccountFeatured = () => {
     <Column>
       <ColumnBackButton />
 
-      <div className='scrollable scrollable--flex'>
+      <Scrollable>
         {accountId && (
           <AccountHeader accountId={accountId} hideTabs={forceEmptyState} />
         )}
-        {!featuredTags.isEmpty() && (
+        {!featuredAccountIds.isEmpty() && (
           <>
-            <h4 className='column-subheading'>
+            <Subheading as='h2'>
               <FormattedMessage
-                id='account.featured.hashtags'
-                defaultMessage='Hashtags'
+                id='account.featured.accounts'
+                defaultMessage='Profiles'
               />
-            </h4>
-            {featuredTags.map((tag) => (
-              <FeaturedTag key={tag.get('id')} tag={tag} account={acct} />
-            ))}
+            </Subheading>
+            <ItemList>
+              {featuredAccountIds.map((featuredAccountId, index) => (
+                <Article
+                  focusable
+                  key={featuredAccountId}
+                  aria-posinset={index + 1}
+                  aria-setsize={featuredAccountIds.size}
+                >
+                  <AccountListItem
+                    accountId={featuredAccountId}
+                    reference='featured_account'
+                  />
+                </Article>
+              ))}
+            </ItemList>
           </>
         )}
-        {!featuredStatusIds.isEmpty() && (
-          <>
-            <h4 className='column-subheading'>
+        <Subheading as='header'>
+          <h2>
+            <FormattedMessage
+              id='account.featured.collections'
+              defaultMessage='Collections'
+            />
+          </h2>
+          {isOwnProfile && (
+            <SubheadingLink to='/collections/new' icon={AddIcon}>
               <FormattedMessage
-                id='account.featured.posts'
-                defaultMessage='Posts'
+                id='account.featured.new_collection'
+                defaultMessage='New collection'
               />
-            </h4>
-            {featuredStatusIds.map((statusId) => (
-              <StatusContainer
-                key={`f-${statusId}`}
-                // @ts-expect-error inferred props are wrong
-                id={statusId}
-                contextType='account'
-              />
-            ))}
-          </>
+            </SubheadingLink>
+          )}
+        </Subheading>
+        {hasCollections ? (
+          <ItemList>
+            <TruncatedListItems
+              visibleItems={listedCollections}
+              truncatedItems={isOwnProfile ? unlistedCollections : []}
+              toggleButton={{
+                title: (
+                  <FormattedMessage
+                    id='collections.unlisted_collections_with_count'
+                    defaultMessage='Unlisted collections ({count})'
+                    values={{ count: unlistedCollections.length }}
+                  />
+                ),
+                subtitle: (
+                  <FormattedMessage
+                    id='collections.unlisted_collections_description'
+                    defaultMessage='These don’t appear on your profile to others. Anyone with the link can discover them.'
+                  />
+                ),
+              }}
+              renderListItem={renderListItem}
+            />
+          </ItemList>
+        ) : (
+          <EmptyMessage
+            withoutAddCollectionButton
+            blockedBy={blockedBy}
+            hidden={hidden}
+            suspended={suspended}
+            accountId={accountId}
+          />
         )}
         <RemoteHint accountId={accountId} />
-      </div>
+      </Scrollable>
     </Column>
   );
 };

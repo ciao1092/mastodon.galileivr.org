@@ -2,7 +2,7 @@
 import PropTypes from 'prop-types';
 import { PureComponent } from 'react';
 
-import { defineMessages, injectIntl } from 'react-intl';
+import { defineMessages } from 'react-intl';
 
 import ImmutablePropTypes from 'react-immutable-proptypes';
 
@@ -11,6 +11,7 @@ import HomeIcon from '@/material-icons/400-24px/home.svg?react';
 import { Icon } from 'flavours/glitch/components/icon';
 import { MediaIcon } from 'flavours/glitch/components/media_icon';
 import { languages } from 'flavours/glitch/initial_state';
+import { injectIntl } from '@/flavours/glitch/components/intl';
 
 import { VisibilityIcon } from './visibility_icon';
 
@@ -61,16 +62,14 @@ class StatusIcons extends PureComponent {
             className='status__reply-icon'
             id='comment'
             icon={ForumIcon}
-            aria-hidden='true'
-            title={intl.formatMessage(messages.inReplyTo)}
+            aria-label={intl.formatMessage(messages.inReplyTo)}
           />
         ) : null}
         {settings.get('local_only') && status.get('local_only') &&
           <Icon
             id='home'
             icon={HomeIcon}
-            aria-hidden='true'
-            title={intl.formatMessage(messages.localOnly)}
+            aria-label={intl.formatMessage(messages.localOnly)}
           />}
         {settings.get('media') && !!mediaIcons && mediaIcons.map(icon => (<MediaIcon key={`media-icon--${icon}`} className='status__media-icon' icon={icon} />))}
         {settings.get('visibility') && <VisibilityIcon visibility={status.get('visibility')} />}
